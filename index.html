@@ -1,6 +1,6 @@
-<!-- Version: WebApp V1.0 Rev 1 -->
+<!-- Version: WebApp V1.0 Rev 2 -->
 <!-- Deskripsi: SPA Depth Estimation -->
-<!-- Perbaikan: Mengganti loadLayersModel menjadi loadGraphModel untuk kompatibilitas Keras 3. -->
+<!-- Perbaikan: Menambahkan kanvas Gambar Asli untuk komparasi visual berdampingan dengan Depth Map (Grayscale). -->
 
 <!DOCTYPE html>
 <html lang="id">
@@ -52,11 +52,27 @@
             display: block;
             transform: scaleX(-1);
         }
+        .result-container {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .canvas-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .canvas-wrapper h4 {
+            margin: 0 0 10px 0;
+            color: #4da6ff;
+        }
         canvas {
             width: 100%;
+            max-width: 256px;
             background-color: #1e1e1e;
             border-radius: 10px;
-            margin-bottom: 15px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.3);
         }
         button {
@@ -101,16 +117,28 @@
 
         <button id="captureBtn" disabled>Ambil & Proses Gambar</button>
 
-        <h3 style="margin-top: 20px;">Hasil Depth Map:</h3>
-        <canvas id="outputCanvas" width="256" height="256"></canvas>
+        <!-- PERUBAHAN REV 2: Layout Komparasi Visual -->
+        <div class="result-container" id="resultArea" style="display: none;">
+            <div class="canvas-wrapper">
+                <h4>Gambar Kamera (Asli)</h4>
+                <canvas id="originalCanvas" width="256" height="256"></canvas>
+            </div>
+            <div class="canvas-wrapper">
+                <h4>Peta Kedalaman (AI)</h4>
+                <canvas id="outputCanvas" width="256" height="256"></canvas>
+            </div>
+        </div>
     </div>
 
     <script>
         const videoElement = document.getElementById('webcam');
         const captureBtn = document.getElementById('captureBtn');
+        const originalCanvas = document.getElementById('originalCanvas');
         const outputCanvas = document.getElementById('outputCanvas');
-        const ctx = outputCanvas.getContext('2d');
+        const ctxOriginal = originalCanvas.getContext('2d');
+        const ctxOutput = outputCanvas.getContext('2d');
         const statusText = document.getElementById('status');
+        const resultArea = document.getElementById('resultArea');
 
         let model = null;
 
@@ -135,10 +163,8 @@
 
         async function loadModel() {
             try {
-                // PERUBAHAN REV 1: Menggunakan loadGraphModel
                 model = await tf.loadGraphModel('./tfjs_graph_model/model.json');
                 
-                // Pemanasan model (Warming up) agar prediksi pertama tidak lag
                 const dummyInput = tf.zeros([1, 256, 256, 3]);
                 model.predict(dummyInput).dispose();
                 dummyInput.dispose();
@@ -160,26 +186,41 @@
             captureBtn.innerText = "Memproses AI...";
             statusText.innerText = "Status: AI sedang menganalisis dimensi spasial...";
             statusText.style.color = "#ffcc00";
+            
+            // Tampilkan area hasil
+            resultArea.style.display = "flex";
 
             tf.tidy(() => {
+                // 1. Tangkap gambar asli dari video
                 const imgTensor = tf.browser.fromPixels(videoElement);
-                const resized = tf.image.resizeBilinear(imgTensor, [256, 256]);
-                const normalized = resized.div(tf.scalar(255.0));
+                
+                // 2. Potong/Sesuaikan ukuran gambar asli agar pas dengan kotak presentasi (256x256)
+                const resizedOriginal = tf.image.resizeBilinear(imgTensor, [256, 256]);
+                
+                // 3. Render gambar asli ke kanvas pertama
+                tf.browser.toPixels(resizedOriginal.div(tf.scalar(255.0)), originalCanvas);
+
+                // 4. Siapkan tensor untuk dimasukkan ke AI (Normalisasi)
+                const normalized = resizedOriginal.div(tf.scalar(255.0));
                 const batched = normalized.expandDims(0);
                 
+                // 5. Prediksi Kedalaman
                 const prediction = model.predict(batched);
                 const depthData = prediction.squeeze().dataSync();
 
-                const imgData = ctx.createImageData(256, 256);
+                // 6. Render hasil Depth Map (Grayscale) ke kanvas kedua
+                const imgData = ctxOutput.createImageData(256, 256);
                 for (let i = 0; i < depthData.length; i++) {
-                    const val = depthData[i] * 255;
+                    // Jika kamu ingin membalik warna (Hitam jadi jauh, Putih jadi dekat), 
+                    // ubah baris di bawah menjadi: const val = (1.0 - depthData[i]) * 255;
+                    const val = depthData[i] * 255; 
                     
                     imgData.data[i * 4] = val;       
                     imgData.data[i * 4 + 1] = val;   
                     imgData.data[i * 4 + 2] = val;   
                     imgData.data[i * 4 + 3] = 255;   
                 }
-                ctx.putImageData(imgData, 0, 0);
+                ctxOutput.putImageData(imgData, 0, 0);
             });
 
             captureBtn.innerText = "Ambil & Proses Gambar";
