@@ -1,0 +1,201 @@
+<!-- Version: WebApp V1.0 Rev 1 -->
+<!-- Deskripsi: SPA Depth Estimation -->
+<!-- Perbaikan: Mengganti loadLayersModel menjadi loadGraphModel untuk kompatibilitas Keras 3. -->
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Depth Estimation AI</title>
+    <!-- Memuat TensorFlow.js dari CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h2 {
+            margin-bottom: 5px;
+            text-align: center;
+        }
+        p {
+            color: #aaaaaa;
+            font-size: 14px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            max-width: 500px;
+        }
+        .video-container {
+            position: relative;
+            width: 100%;
+            background-color: #1e1e1e;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        video {
+            width: 100%;
+            display: block;
+            transform: scaleX(-1);
+        }
+        canvas {
+            width: 100%;
+            background-color: #1e1e1e;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+            transition: background-color 0.3s;
+            margin-bottom: 10px;
+        }
+        button:disabled {
+            background-color: #555555;
+            cursor: not-allowed;
+        }
+        button:hover:not(:disabled) {
+            background-color: #0056b3;
+        }
+        #status {
+            margin-top: 10px;
+            font-weight: bold;
+            color: #ffcc00;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Estimasi Kedalaman Ruang</h2>
+    <p>Proyek Computer Vision - U-Net MobileNetV2</p>
+
+    <div class="container">
+        <div id="status">Status: Memuat Model AI (Graph Model)...</div>
+        
+        <div class="video-container">
+            <video id="webcam" autoplay playsinline></video>
+        </div>
+
+        <button id="captureBtn" disabled>Ambil & Proses Gambar</button>
+
+        <h3 style="margin-top: 20px;">Hasil Depth Map:</h3>
+        <canvas id="outputCanvas" width="256" height="256"></canvas>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const captureBtn = document.getElementById('captureBtn');
+        const outputCanvas = document.getElementById('outputCanvas');
+        const ctx = outputCanvas.getContext('2d');
+        const statusText = document.getElementById('status');
+
+        let model = null;
+
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' }
+                });
+                videoElement.srcObject = stream;
+                
+                return new Promise((resolve) => {
+                    videoElement.onloadedmetadata = () => {
+                        resolve(videoElement);
+                    };
+                });
+            } catch (error) {
+                statusText.innerText = "Error: Kamera tidak diizinkan atau tidak ditemukan.";
+                statusText.style.color = "#ff4444";
+                console.error(error);
+            }
+        }
+
+        async function loadModel() {
+            try {
+                // PERUBAHAN REV 1: Menggunakan loadGraphModel
+                model = await tf.loadGraphModel('./tfjs_graph_model/model.json');
+                
+                // Pemanasan model (Warming up) agar prediksi pertama tidak lag
+                const dummyInput = tf.zeros([1, 256, 256, 3]);
+                model.predict(dummyInput).dispose();
+                dummyInput.dispose();
+
+                statusText.innerText = "Status: Model Siap. Silakan arahkan kamera.";
+                statusText.style.color = "#00ff00";
+                captureBtn.disabled = false;
+            } catch (error) {
+                statusText.innerText = "Error: Gagal memuat file Graph Model.";
+                statusText.style.color = "#ff4444";
+                console.error("Gagal memuat model:", error);
+            }
+        }
+
+        async function processImage() {
+            if (!model) return;
+
+            captureBtn.disabled = true;
+            captureBtn.innerText = "Memproses AI...";
+            statusText.innerText = "Status: AI sedang menganalisis dimensi spasial...";
+            statusText.style.color = "#ffcc00";
+
+            tf.tidy(() => {
+                const imgTensor = tf.browser.fromPixels(videoElement);
+                const resized = tf.image.resizeBilinear(imgTensor, [256, 256]);
+                const normalized = resized.div(tf.scalar(255.0));
+                const batched = normalized.expandDims(0);
+                
+                const prediction = model.predict(batched);
+                const depthData = prediction.squeeze().dataSync();
+
+                const imgData = ctx.createImageData(256, 256);
+                for (let i = 0; i < depthData.length; i++) {
+                    const val = depthData[i] * 255;
+                    
+                    imgData.data[i * 4] = val;       
+                    imgData.data[i * 4 + 1] = val;   
+                    imgData.data[i * 4 + 2] = val;   
+                    imgData.data[i * 4 + 3] = 255;   
+                }
+                ctx.putImageData(imgData, 0, 0);
+            });
+
+            captureBtn.innerText = "Ambil & Proses Gambar";
+            captureBtn.disabled = false;
+            statusText.innerText = "Status: Pemrosesan selesai. Siap untuk foto berikutnya.";
+            statusText.style.color = "#00ff00";
+        }
+
+        captureBtn.addEventListener('click', processImage);
+
+        async function initApp() {
+            await setupCamera();
+            await loadModel();
+        }
+
+        initApp();
+    </script>
+</body>
+</html>
